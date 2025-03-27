@@ -8,23 +8,29 @@ import pygmo as pg
 from numba import jit, float64
 import numpy as np
 from argparse import ArgumentParser
+import csv
 
 parser = ArgumentParser()
 parser.add_argument('-i', default=1000, type=int, required=False, help='maxiter=4000, 400')
 parser.add_argument('-p', default=100, type=int, required=False, help='popsize=2, 10')
 parser.add_argument('-m', default=0.5, type=float, required=False, help='mutation=0.5')
 parser.add_argument('-r', default=0.3, type=float, required=False, help='recombination=0.3')
-parser.add_argument('-s', default=11, type=int, required=False, help='11, 12, 13, ...')
+parser.add_argument('-s', default=1, type=int, required=False, help='11, 12, 13, ...')
 parser.add_argument('-n', default='Super1', type=str, required=False, help='node=Super1')
 parser.add_argument('-w', default=1, type=int, required=False, help='Number of islands in differential evolution (i.e. workers)')
+parser.add_argument('-steps', default=1, type=int, required=False, help='Number of steps in capacity expansion')
 args = parser.parse_args()
 
 scenario = args.s
 node = args.n
+steps = args.steps
+runCount = 0
+
 
 from Input import *
 from Simulation import Reliability
 from Network import Transmission
+
 
 @jit(nopython=True)
 
@@ -63,12 +69,23 @@ def F(x):
 
     return Func
 
-if __name__=='__main__':
+def main():
+    global runCount
     starttime = dt.datetime.now()
-    print("Optimisation starts at", starttime)
+    print("Optimisation for interval", runCount, " starts at", starttime)
+ 
 
-    lb = [0.]  * pzones + [0.]   * wzones + contingency   + [0.]
-    ub = [50.] * pzones + [50.]  * wzones + [50.] * nodes + [5000.]
+    if runCount >= 1:
+        with open('Results/Optimisation_resultx{}{}.csv'.format(args.n, args.i)) as f:
+            reader = csv.reader(f)
+            last_row = None
+            for row in reader:
+                last_row = row
+        lb = last_row
+    else:
+        lb = [0.]  * pzones + [0.]   * wzones + contingency   + [0.]
+    
+    ub = [PVBuildRateLimit] * pzones + [WindBuildRateLimit]  * wzones + [50.] * nodes + [5000.]
 
     class EnergyOptimizationProblem:
         def __init__(self, lb, ub):
@@ -100,7 +117,7 @@ if __name__=='__main__':
 
     if args.w > 1:
         # Number of islands in the archipelago
-        n_islands = 8  # You can adjust this based on your system's capabilities
+        n_islands = args.w  # You can adjust this based on your system's capabilities
 
         # Create an archipelago with the specified number of islands
         archi = pg.archipelago(n=n_islands, algo=algo, prob=prob, pop_size=args.p)
@@ -115,6 +132,7 @@ if __name__=='__main__':
         # You can inspect each island's best solution or aggregate results as needed
         for i, isl in enumerate(archi):
             print(f"Island {i}: Best Fitness = {isl.get_population().champion_x} {isl.get_population().champion_f}")
+        
 
     else:
         pop = pg.population(prob, size=args.p)
@@ -127,9 +145,18 @@ if __name__=='__main__':
         print("Best solution:", best_solution)
         print("Value of the objective function:", best_solution_fitness)
 
-    """ with open('Results/Optimisation_resultx{}{}.csv'.format(args.n, args.e), 'a', newline="") as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(best_solution) """
+        with open('Results/Optimisation_resultx{}{}.csv'.format(args.n, args.i), 'a', newline="") as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(best_solution)
+
+        if args.steps > 1:
+            with open('Results/LCOE_resultx{}{}.csv'.format(args.n, args.i), 'a', newline="") as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow([best_solution_fitness])
 
     endtime = dt.datetime.now()
-    print("Optimisation took", endtime - starttime)
+    print("Optimisation for interval ", runCount, " took", endtime - starttime)
+    runCount = runCount + 1
+
+if __name__=='__main__':
+    main()

@@ -4,10 +4,21 @@
 # Correspondence: bin.lu@anu.edu.au
 
 import numpy as np
-from Optimisation import scenario, node
+from Optimisation import scenario, node, steps, runCount
 from numba import float64, int32, types, int64
 from numba.experimental import jitclass
 
+
+#if year == 0:
+#    start = 0
+#    end = 17568
+#if year == 8:
+#    start = 157824
+#    end = 175344
+#print ("year", year)
+
+
+#157825 - 175344 157825:175343
 Nodel = np.array(['FNQ', 'NSW', 'NT', 'QLD', 'SA', 'TAS', 'VIC', 'WA'])
 PVl =   np.array(['NSW']*7 + ['FNQ']*1 + ['QLD']*2 + ['FNQ']*3 + ['SA']*6 + ['TAS']*0 + ['VIC']*1 + ['WA']*1 + ['NT']*1)
 Windl = np.array(['NSW']*8 + ['FNQ']*1 + ['QLD']*2 + ['FNQ']*2 + ['SA']*8 + ['TAS']*4 + ['VIC']*4 + ['WA']*3 + ['NT']*1)
@@ -22,12 +33,22 @@ Windl_int = Windl_int.astype(np.int32)
 
 resolution = 0.5
 
-MLoad = np.genfromtxt('Data/electricity.csv', delimiter=',', skip_header=1, usecols=range(4, 4+len(Nodel))) # EOLoad(t, j), MW
+MLoad = np.genfromtxt('Data/electricitytest.csv', delimiter=',', skip_header=1, usecols=range(4, 4+len(Nodel))) # EOLoad(t, j), MW
+
+start = int((runCount/steps)*len(MLoad))
+end = int(((runCount+1)/steps)*len(MLoad))
+print("runcount, steps", runCount, steps)
+print("start, end", start, end)
+
+MLoad = MLoad[start:end, : ]
 
 TSPV = np.genfromtxt('Data/pv.csv', delimiter=',', skip_header=1, usecols=range(4, 4+len(PVl))) # TSPV(t, i), MW
 TSWind = np.genfromtxt('Data/wind.csv', delimiter=',', skip_header=1, usecols=range(4, 4+len(Windl))) # TSWind(t, i), MW
+TSPV = TSPV[start :end, : ]
+TSWind = TSWind[start :end, : ]
 
-assets = np.genfromtxt('Data/hydrobio.csv', dtype=None, delimiter=',', encoding=None)[1:, 1:].astype(np.float)
+
+assets = np.genfromtxt('Data/hydrobio.csv', dtype=None, delimiter=',', encoding=None)[1:, 1:].astype(np.float64)
 CHydro, CBio = [assets[:, x] * pow(10, -3) for x in range(assets.shape[1])] # CHydro(j), MW to GW
 CBaseload = np.array([0, 0, 0, 0, 0, 1.0, 0, 0]) # 24/7, GW
 CPeak = CHydro + CBio - CBaseload # GW
@@ -38,15 +59,17 @@ DCloss = np.array([1500, 1000, 1000, 800, 1200, 2400, 400]) * 0.03 * pow(10, -3)
 efficiency = 0.8
 factor = np.genfromtxt('Data/factor.csv', delimiter=',', usecols=1)
 
-firstyear, finalyear, timestep = (2020, 2029, 1)
 
-if scenario<=17:
-    node = Nodel[scenario % 10]
+if node == 'Super1': #Defult option
+    coverage = Nodel
+else:
+    coverage = np.array([node])
 
-    MLoad = MLoad[:, np.where(Nodel==node)[0]]
-    TSPV = TSPV[:, np.where(PVl==node)[0]]
-    TSWind = TSWind[:, np.where(Windl==node)[0]]
-    CHydro, CBio, CBaseload, CPeak = [x[np.where(Nodel==node)[0]] for x in (CHydro, CBio, CBaseload, CPeak)]
+    MLoad = MLoad[:, np.where(np.in1d(Nodel, coverage)==True)[0]]
+    TSPV = TSPV[:, np.where(np.in1d(PVl, coverage)==True)[0]]
+    TSWind = TSWind[:, np.where(np.in1d(Windl, coverage)==True)[0]]
+
+    CHydro, CBio, CBaseload, CPeak = [x[np.where(np.in1d(Nodel, coverage)==True)[0]] for x in (CHydro, CBio, CBaseload, CPeak)]
 
     Nodel_int, PVl_int, Windl_int = [x[np.where(Nodel==node)[0]] for x in (Nodel_int, PVl_int, Windl_int)]
     Nodel, PVl, Windl = [x[np.where(x==node)[0]] for x in (Nodel, PVl, Windl)]
@@ -60,6 +83,9 @@ energy = MLoad.sum() * pow(10, -9) * resolution / years # PWh p.a.
 contingency = list(0.25 * MLoad.max(axis=0) * pow(10, -3)) # MW to GW
 
 GBaseload = np.tile(CBaseload, (intervals, 1)) * pow(10, 3) # GW to MW
+
+PVBuildRateLimit = 5 * 10/steps #GW/year
+WindBuildRateLimit = 5 * 10/steps #GW/year
 
 # Specify the types for jitclass
 solution_spec = [
@@ -94,6 +120,7 @@ solution_spec = [
     ('Deficit', float64[:,:]),
     ('Spillage', float64[:,:])
 ]
+
 
 @jitclass(solution_spec)
 class Solution:
@@ -147,4 +174,3 @@ class Solution:
     def __repr__(self):
         """S = Solution(list(np.ones(64))) >> print(S)"""
         return 'Solution({})'.format(self.x)
-
