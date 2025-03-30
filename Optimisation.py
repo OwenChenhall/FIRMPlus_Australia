@@ -36,7 +36,6 @@ from Network import Transmission
 
 def F(x):
     """This is the objective function."""
-
     S = Solution(x)
 
     Deficit = Reliability(S, flexible=np.zeros(intervals, dtype=np.float64)) # Sj-EDE(t, j), MW
@@ -74,7 +73,6 @@ def main():
     starttime = dt.datetime.now()
     print("Optimisation for interval", runCount, " starts at", starttime)
  
-
     if runCount >= 1:
         with open('Results/Optimisation_resultx{}{}.csv'.format(args.n, args.i)) as f:
             reader = csv.reader(f)

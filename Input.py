@@ -37,15 +37,9 @@ MLoad = np.genfromtxt('Data/electricitytest.csv', delimiter=',', skip_header=1, 
 
 start = int((runCount/steps)*len(MLoad))
 end = int(((runCount+1)/steps)*len(MLoad))
-print("runcount, steps", runCount, steps)
-print("start, end", start, end)
-
-MLoad = MLoad[start:end, : ]
 
 TSPV = np.genfromtxt('Data/pv.csv', delimiter=',', skip_header=1, usecols=range(4, 4+len(PVl))) # TSPV(t, i), MW
 TSWind = np.genfromtxt('Data/wind.csv', delimiter=',', skip_header=1, usecols=range(4, 4+len(Windl))) # TSWind(t, i), MW
-TSPV = TSPV[start :end, : ]
-TSWind = TSWind[start :end, : ]
 
 
 assets = np.genfromtxt('Data/hydrobio.csv', dtype=None, delimiter=',', encoding=None)[1:, 1:].astype(np.float64)
@@ -135,10 +129,6 @@ class Solution:
 
         self.CPV = x[: pidx]  # CPV(i), GW
         self.CWind = x[pidx: widx]  # CWind(i), GW
-        """ if node == 'Super2':
-            self.CInter = NumbaList(x[sidx+1: iidx]) # CInter(j), GW
-        else:
-            self.CInter = NumbaList([0.0])  # CInter(j), GW """
         
         # Manually replicating np.tile functionality for CPV and CWind
         CPV_tiled = np.zeros((intervals, len(self.CPV)))
@@ -149,8 +139,6 @@ class Solution:
                 CPV_tiled[i, j] = self.CPV[j]
             for j in range(len(self.CWind)):
                 CWind_tiled[i, j] = self.CWind[j]
-            """ for j in range(len(self.CInter)):
-                CInter_tiled[i, j] = self.CInter[j] """
 
         self.GPV = TSPV * CPV_tiled * 1000  # GPV(i, t), GW to MW
         self.GWind = TSWind * CWind_tiled * 1000  # GWind(i, t), GW to MW
