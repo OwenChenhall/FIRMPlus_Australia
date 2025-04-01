@@ -6,7 +6,6 @@
 import numpy as np
 from Optimisation import scenario, node, steps, runCount
 from numba import float64, int32, types, int64
-from numba.experimental import jitclass
 
 
 #if year == 0:
@@ -33,13 +32,12 @@ Windl_int = Windl_int.astype(np.int32)
 
 resolution = 0.5
 
-MLoad = np.genfromtxt('Data/electricitytest.csv', delimiter=',', skip_header=1, usecols=range(4, 4+len(Nodel))) # EOLoad(t, j), MW
+MLoad = np.genfromtxt('Data/electricity.csv', delimiter=',', skip_header=1, usecols=range(4, 4+len(Nodel))) # EOLoad(t, j), MW
 
-start = int((runCount/steps)*len(MLoad))
-end = int(((runCount+1)/steps)*len(MLoad))
 
 TSPV = np.genfromtxt('Data/pv.csv', delimiter=',', skip_header=1, usecols=range(4, 4+len(PVl))) # TSPV(t, i), MW
 TSWind = np.genfromtxt('Data/wind.csv', delimiter=',', skip_header=1, usecols=range(4, 4+len(Windl))) # TSWind(t, i), MW
+
 
 
 assets = np.genfromtxt('Data/hydrobio.csv', dtype=None, delimiter=',', encoding=None)[1:, 1:].astype(np.float64)
@@ -78,8 +76,6 @@ contingency = list(0.25 * MLoad.max(axis=0) * pow(10, -3)) # MW to GW
 
 GBaseload = np.tile(CBaseload, (intervals, 1)) * pow(10, 3) # GW to MW
 
-PVBuildRateLimit = 5 * 10/steps #GW/year
-WindBuildRateLimit = 5 * 10/steps #GW/year
 
 # Specify the types for jitclass
 solution_spec = [
@@ -116,7 +112,6 @@ solution_spec = [
 ]
 
 
-@jitclass(solution_spec)
 class Solution:
     #A candidate solution of decision variables CPV(i), CWind(i), CPHP(j), S-CPHS(j)
     
@@ -141,7 +136,7 @@ class Solution:
                 CWind_tiled[i, j] = self.CWind[j]
 
         self.GPV = TSPV * CPV_tiled * 1000  # GPV(i, t), GW to MW
-        self.GWind = TSWind * CWind_tiled * 1000  # GWind(i, t), GW to MW
+        self.GWind = TSWind* CWind_tiled * 1000  # GWind(i, t), GW to MW
         #self.GInter = CWind_tiled * 1000  # GInter(j, t), GW to MW
 
         self.CPHP = x[widx: sidx]  # CPHP(j), GW

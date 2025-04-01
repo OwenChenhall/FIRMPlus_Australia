@@ -6,7 +6,6 @@
 import numpy as np
 from numba import jit
 
-@jit(nopython=True)
 def Reliability(solution, flexible):
 
     Netload = (solution.MLoad.sum(axis=1) - solution.GPV.sum(axis=1) - solution.GWind.sum(axis=1) - solution.GBaseload.sum(axis=1)) - flexible # Sj-ENLoad(j, t)

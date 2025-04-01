@@ -1,9 +1,9 @@
-import datetime as dt
-import pygmo as pg
-from numba import jit, float64
 import numpy as np
+from scipy.optimize import differential_evolution, NonlinearConstraint
 from argparse import ArgumentParser
 import csv
+import importlib
+import datetime as dt
 
 parser = ArgumentParser()
 parser.add_argument('-i', default=1000, type=int, required=False, help='maxiter=4000, 400')
@@ -19,124 +19,121 @@ args = parser.parse_args()
 scenario = args.s
 node = args.n
 steps = args.steps
-
-
+runCount = 0
 
 from Input import *
 from Simulation import Reliability
 from Network import Transmission
 
-def growth_differences(x):
-    num_diffs = len(x) - 2
+def growth_constaint(x):
+    num_diffs = int(len(PVl) + len(Windl) + 2)
     diffs = np.empty(num_diffs, dtype=x.dtype) 
-    for i in num_diffs:
-        diffs[i] = x[len(x)/2+i] - x[i]
-    return diffs 
+    for i in range(num_diffs):
+        diffs[i] = x[(num_diffs)+i] - x[i]
+    return diffs
 
-@jit(nopython=True)
+
 def F(x):
     """This is the objective function."""
-    S = Solution(x)
+    Func = 0
+    length = int(len(PVl) + len(Windl) + 2)
 
-    Deficit = Reliability(S, flexible=np.zeros(intervals, dtype=np.float64)) # Sj-EDE(t, j), MW
-    Flexible = Deficit.sum() * resolution / years / efficiency # MWh p.a.
-    Hydro = Flexible + GBaseload.sum() * resolution / years # Hydropower & biomass: MWh p.a.
-    PenHydro = max(0, Hydro - 20 * 1000000) # TWh p.a. to MWh p.a.
+    #Calculate cost to build
+    #build_cost = ( (x[:pidx]).sum() * 10 + (x[pidx: widx]).sum() * 10
+    #           + (x[17: pidx+17]).sum() * 20 + (x[pidx+17:widx+17]).sum() * 20 ) 
+    
+    #Calculate LCOE
+    for i in range(2):
+        S = Solution(x[i*length:length*(i+1)])
+        demand_multiplier = 1+i
 
-    TDC = Transmission(S) if 'Super' in node else np.zeros((intervals, len(DCloss)), dtype=np.float64)  # TDC: TDC(t, k), MW
-    TDC_abs = np.abs(TDC)
+        S.MLoad = MLoad * demand_multiplier
 
-    Deficit = Reliability(S, flexible=np.ones(intervals, dtype=np.float64)*CPeak.sum()*1000) # Sj-EDE(t, j), GW to MW
-    Deficit_sum = Deficit.sum() * resolution
-    PenDeficit = max(0, Deficit_sum) # MWh
+        Deficit = Reliability(S, flexible=np.zeros(intervals, dtype=np.float64)) # Sj-EDE(t, j), MW
+        Flexible = Deficit.sum() * resolution / years / efficiency # MWh p.a.
+        Hydro = Flexible + GBaseload.sum() * resolution / years # Hydropower & biomass: MWh p.a.
+        PenHydro = max(0, Hydro - 20 * 1000000) # TWh p.a. to MWh p.a.
 
-    CDC = np.zeros(len(DCloss), dtype=np.float64)
-    for i in range(0,intervals):
-        for j in range(0,len(DCloss)):
-            if TDC_abs[i][j] > CDC[j]:
-                CDC[j] = TDC_abs[i][j]
-    CDC = CDC * 0.001 # CDC(k), MW to GW
+        TDC = Transmission(S) if 'Super' in node else np.zeros((intervals, len(DCloss)), dtype=np.float64)  # TDC: TDC(t, k), MW
+        TDC_abs = np.abs(TDC)
 
-    cost = factor *  np.concatenate((np.array([S.CPV.sum(), S.CWind.sum(), S.CPHP.sum(), S.CPHS]), CDC, np.array([S.CPV.sum(), S.CWind.sum(), Hydro * 0.000001, -1.0, -1.0])))
-    cost = cost.sum()
+        Deficit = Reliability(S, flexible=np.ones(intervals, dtype=np.float64)*CPeak.sum()*1000) # Sj-EDE(t, j), GW to MW
+        Deficit_sum = Deficit.sum() * resolution
+        PenDeficit = max(0, Deficit_sum) # MWh
 
-    loss = TDC_abs.sum(axis=0) * DCloss
-    loss = loss.sum() * 0.000000001 * resolution / years # PWh p.a.
-    LCOE = cost / abs(energy - loss)
+        CDC = np.zeros(len(DCloss), dtype=np.float64)
+        for i in range(0,intervals):
+            for j in range(0,len(DCloss)):
+                if TDC_abs[i][j] > CDC[j]:
+                    CDC[j] = TDC_abs[i][j]
+        CDC = CDC * 0.001 # CDC(k), MW to GW
 
-    Func = LCOE + PenDeficit + PenHydro
+        cost = factor *  np.concatenate((np.array([S.CPV.sum(), S.CWind.sum(), S.CPHP.sum(), S.CPHS]), CDC, np.array([S.CPV.sum(), S.CWind.sum(), Hydro * 0.000001, -1.0, -1.0])))
+        cost = cost.sum()
+
+        loss = TDC_abs.sum(axis=0) * DCloss
+        loss = loss.sum() * 0.000000001 * resolution / years # PWh p.a.
+        LCOE = cost / abs(energy - loss)
+
+        Func = Func + LCOE + PenDeficit + PenHydro
+  
 
     return Func
 
+class GrowthConstraint:
+    def __init__(self):
+        self.lb = np.zeros(int(len(PVl) + len(Windl) + 2))
+        self.ub = np.full(int(len(PVl) + len(Windl) + 2), np.inf)
+
+    def __call__(self, x):
+        return growth_constaint(x)
+    
+balancing_constraint = GrowthConstraint() 
+monotonicity_growth_constraint = NonlinearConstraint(
+                                fun=balancing_constraint,
+                                lb=balancing_constraint.lb,
+                                ub=balancing_constraint.ub,
+                            )
+
+PVBuildRateLimit = 5 #GW/step/generator
+WindBuildRateLimit = 5 #GW/year/generator
+
+lb = ([0.]  * pzones + [0.]   * wzones + contingency   + [0.])*2
+ub = ([PVBuildRateLimit] * pzones + [WindBuildRateLimit]  * wzones + [50.] * nodes + [5000.] +
+        [PVBuildRateLimit*2] * pzones + [WindBuildRateLimit*2]  * wzones + [50.] * nodes + [5000.])    
+
+
 def main():
+
     starttime = dt.datetime.now()
     print("Optimisation starts at", starttime)
-        
-    lb = ([0.]  * pzones + [0.]   * wzones + contingency   + [0.]) * 2
-    ub = ([50.] * pzones + [50.]  * wzones + [50.] * nodes + [5000.]) *2
 
-    class EnergyOptimizationProblem:
-        def __init__(self, lb, ub):
-            self.lb = lb
-            self.ub = ub
-        
-        def fitness(self, x):
-            return EnergyOptimizationProblem._fitness(x)
-        
-        @jit(float64[:](float64[:]), nopython=True)
-        def _fitness(x):
-            retval = np.zeros((1,))
-            retval[0] = F(x)
-            # Your objective function F(x) goes here, return a tuple with one element
-            return retval
-
-        def get_bounds(self):
-            # Return the bounds as tuples of (lb, ub)
-            return (self.lb, self.ub)
-
-        def get_nobj(self):
-            # Return the number of objectives
-            return 1
-
-        def get_constraints(self, x):
-            # Return contraints
-            num_diffs = len(x) - 2
-            diffs = np.empty(num_diffs, dtype=x.dtype) 
-            for i in num_diffs:
-                diffs[i] = x[len(x)/2+i] - x[i]
-            constraints = diffs
-            return constraints
-
-        def get_nic(self):
-            # Return number of inequality constraints
-            return 0
-    
-        def get_nlc(self):
-            # Return number of linear constraints
-            return 0
-
-    prob = pg.problem(EnergyOptimizationProblem(lb, ub))
-
-    algo = pg.algorithm(pg.de(gen=args.i, F=args.m, CR=args.r))
-    algo.set_verbosity(1)  # Change verbosity level to control the amount of logging
-
-    pop = pg.population(prob, size=args.p)
-    pop = algo.evolve(pop)
-
-    best_solution = pop.champion_x
-    best_solution_fitness = pop.champion_f[0]  # Assuming a single-objective problem
-
-    # Print the best solution and its objective function value
-    print("Best solution:", best_solution)
-    print("Value of the objective function:", best_solution_fitness)
+    result = differential_evolution(
+            func=F, 
+            bounds=list(zip(lb, ub)), 
+            constraints=(monotonicity_growth_constraint,), 
+            tol=0,
+            maxiter=args.i, 
+            popsize=args.p, 
+            mutation=args.m, 
+            recombination=args.r,
+            disp=True, 
+            polish=False, 
+            updating='deferred',
+            workers=-1,
+            vectorized=False,
+            )
 
     with open('Results/Optimisation_resultx{}{}.csv'.format(args.n, args.i), 'a', newline="") as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(best_solution)
+            writer = csv.writer(csvfile)
+            writer.writerow([result.fun])
+            writer.writerow(result.x[0:int(len(result.x)/2)])
+            writer.writerow(result.x[int(len(result.x)/2):len(result.x)])
 
     endtime = dt.datetime.now()
-    print("Optimisation for interval took", endtime - starttime)
+    print("Optimisation took", endtime - starttime)
 
+    return result
 
-if __name__=='__main__':
+if __name__ == "__main__":
     main()
